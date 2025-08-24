@@ -31,6 +31,7 @@ from diffusion_policy.model.common.lr_scheduler import get_scheduler
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
+
 class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
     include_keys = ['global_step', 'epoch']
 
@@ -44,7 +45,8 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
         random.seed(seed)
 
         # configure model
-        self.model: DiffusionUnetHybridImagePolicy = hydra.utils.instantiate(cfg.policy)
+        self.model: DiffusionUnetHybridImagePolicy = hydra.utils.instantiate(
+            cfg.policy)
 
         self.ema_model: DiffusionUnetHybridImagePolicy = None
         if cfg.training.use_ema:
@@ -89,8 +91,8 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
             optimizer=self.optimizer,
             num_warmup_steps=cfg.training.lr_warmup_steps,
             num_training_steps=(
-                len(train_dataloader) * cfg.training.num_epochs) \
-                    // cfg.training.gradient_accumulate_every,
+                len(train_dataloader) * cfg.training.num_epochs)
+            // cfg.training.gradient_accumulate_every,
             # pytorch assumes stepping LRScheduler every epoch
             # however huggingface diffusers steps it every batch
             last_epoch=self.global_step-1
@@ -104,11 +106,12 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
                 model=self.ema_model)
 
         # configure env
-        env_runner: BaseImageRunner
-        env_runner = hydra.utils.instantiate(
-            cfg.task.env_runner,
-            output_dir=self.output_dir)
-        assert isinstance(env_runner, BaseImageRunner)
+        if cfg.use_env:
+            env_runner: BaseImageRunner
+            env_runner = hydra.utils.instantiate(
+                cfg.task.env_runner,
+                output_dir=self.output_dir)
+            assert isinstance(env_runner, BaseImageRunner)
 
         # configure logging
         wandb_run = wandb.init(
@@ -116,6 +119,12 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
             config=OmegaConf.to_container(cfg, resolve=True),
             **cfg.logging
         )
+        # os.environ["WANDB_MODE"] = "offline"
+        # wandb_run = wandb.init(
+        #     dir=str(self.output_dir),
+        #     config=OmegaConf.to_container(cfg, resolve=True),
+        #     **cfg.logging
+        # )
         wandb.config.update(
             {
                 "output_dir": self.output_dir,
@@ -154,11 +163,12 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
                 step_log = dict()
                 # ========= train for this epoch ==========
                 train_losses = list()
-                with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}", 
-                        leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
+                with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}",
+                               leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                     for batch_idx, batch in enumerate(tepoch):
                         # device transfer
-                        batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
+                        batch = dict_apply(batch, lambda x: x.to(
+                            device, non_blocking=True))
                         if train_sampling_batch is None:
                             train_sampling_batch = batch
 
@@ -172,7 +182,7 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
                             self.optimizer.step()
                             self.optimizer.zero_grad()
                             lr_scheduler.step()
-                        
+
                         # update ema
                         if cfg.training.use_ema:
                             ema.step(self.model)
@@ -188,7 +198,8 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
                             'lr': lr_scheduler.get_last_lr()[0]
                         }
 
-                        is_last_batch = (batch_idx == (len(train_dataloader)-1))
+                        is_last_batch = (batch_idx == (
+                            len(train_dataloader)-1))
                         if not is_last_batch:
                             # log of last step is combined with validation and rollout
                             wandb_run.log(step_log, step=self.global_step)
@@ -196,7 +207,7 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
                             self.global_step += 1
 
                         if (cfg.training.max_train_steps is not None) \
-                            and batch_idx >= (cfg.training.max_train_steps-1):
+                                and batch_idx >= (cfg.training.max_train_steps-1):
                             break
 
                 # at the end of each epoch
@@ -211,26 +222,29 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
                 policy.eval()
 
                 # run rollout
-                if (self.epoch % cfg.training.rollout_every) == 0:
-                    runner_log = env_runner.run(policy)
-                    # log all
-                    step_log.update(runner_log)
+                if cfg.use_env:
+                    if (self.epoch % cfg.training.rollout_every) == 0:
+                        runner_log = env_runner.run(policy)
+                        # log all
+                        step_log.update(runner_log)
 
                 # run validation
                 if (self.epoch % cfg.training.val_every) == 0:
                     with torch.no_grad():
                         val_losses = list()
-                        with tqdm.tqdm(val_dataloader, desc=f"Validation epoch {self.epoch}", 
-                                leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
+                        with tqdm.tqdm(val_dataloader, desc=f"Validation epoch {self.epoch}",
+                                       leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                             for batch_idx, batch in enumerate(tepoch):
-                                batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
+                                batch = dict_apply(batch, lambda x: x.to(
+                                    device, non_blocking=True))
                                 loss = self.model.compute_loss(batch)
                                 val_losses.append(loss)
                                 if (cfg.training.max_val_steps is not None) \
-                                    and batch_idx >= (cfg.training.max_val_steps-1):
+                                        and batch_idx >= (cfg.training.max_val_steps-1):
                                     break
                         if len(val_losses) > 0:
-                            val_loss = torch.mean(torch.tensor(val_losses)).item()
+                            val_loss = torch.mean(
+                                torch.tensor(val_losses)).item()
                             # log epoch average validation loss
                             step_log['val_loss'] = val_loss
 
@@ -238,13 +252,15 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
                 if (self.epoch % cfg.training.sample_every) == 0:
                     with torch.no_grad():
                         # sample trajectory from training set, and evaluate difference
-                        batch = dict_apply(train_sampling_batch, lambda x: x.to(device, non_blocking=True))
+                        batch = dict_apply(train_sampling_batch, lambda x: x.to(
+                            device, non_blocking=True))
                         obs_dict = batch['obs']
                         gt_action = batch['action']
-                        
+
                         result = policy.predict_action(obs_dict)
                         pred_action = result['action_pred']
-                        mse = torch.nn.functional.mse_loss(pred_action, gt_action)
+                        mse = torch.nn.functional.mse_loss(
+                            pred_action, gt_action)
                         step_log['train_action_mse_error'] = mse.item()
                         del batch
                         del obs_dict
@@ -252,7 +268,7 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
                         del result
                         del pred_action
                         del mse
-                
+
                 # checkpoint
                 if (self.epoch % cfg.training.checkpoint_every) == 0:
                     # checkpointing
@@ -266,7 +282,7 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
                     for key, value in step_log.items():
                         new_key = key.replace('/', '_')
                         metric_dict[new_key] = value
-                    
+
                     # We can't copy the last checkpoint here
                     # since save_checkpoint uses threads.
                     # therefore at this point the file might have been empty!
@@ -284,13 +300,15 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
                 self.global_step += 1
                 self.epoch += 1
 
+
 @hydra.main(
     version_base=None,
-    config_path=str(pathlib.Path(__file__).parent.parent.joinpath("config")), 
+    config_path=str(pathlib.Path(__file__).parent.parent.joinpath("config")),
     config_name=pathlib.Path(__file__).stem)
 def main(cfg):
     workspace = TrainDiffusionUnetHybridWorkspace(cfg)
     workspace.run()
+
 
 if __name__ == "__main__":
     main()

@@ -1,8 +1,10 @@
+
 bin
 logs
 wandb
 outputs
-data
+data/
+leap_hand_data/
 data_local
 .vscode
 _wandb
